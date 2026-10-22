@@ -1,18 +1,23 @@
 const { addonBuilder } = require("stremio-addon-sdk");
+const axios = require("axios");
 
-// 1. Definícia Manifestu
 const manifest = {
     id: "org.stvr.archive",
-    version: "1.0.0",
+    version: "1.1.0",
     name: "STVR Archív SK",
-    description: "Slovenský archív STVR pre Stremio, Vidi a Fusion",
-    resources: ["catalog", "stream"],
-    types: ["tv", "series"],
+    description: "Kompletný archív relácií STVR pre Stremio, Vidi a Fusion",
+    resources: ["catalog", "meta", "stream"],
+    types: ["series", "tv"],
     catalogs: [
         {
-            type: "tv",
-            id: "stvr_live",
-            name: "STVR Živé Vysielanie"
+            type: "series",
+            id: "stvr_archive_popular",
+            name: "STVR Najsledovanejšie"
+        },
+        {
+            type: "series",
+            id: "stvr_archive_az",
+            name: "STVR Archív A-Z"
         }
     ],
     idPrefixes: ["stvr:"]
@@ -20,69 +25,110 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// 2. Katalóg - Živé kanály STVR
+// 1. Katalóg relácií z STVR
 builder.defineCatalogHandler(async ({ type, id }) => {
-    if (id === "stvr_live") {
-        return {
-            metas: [
-                {
-                    id: "stvr:jednotka",
-                    type: "tv",
-                    name: "STVR :1 (Jednotka)",
-                    poster: "https://www.stvr.sk/images/logo-jednotka.png",
-                    description: "Živé vysielanie Okruhu :1"
-                },
-                {
-                    id: "stvr:dvojka",
-                    type: "tv",
-                    name: "STVR :2 (Dvojka)",
-                    poster: "https://www.stvr.sk/images/logo-dvojka.png",
-                    description: "Živé vysielanie Okruhu :2"
-                },
-                {
-                    id: "stvr:24",
-                    type: "tv",
-                    name: "STVR :24",
-                    poster: "https://www.stvr.sk/images/logo-24.png",
-                    description: "Spravodajský okruh :24"
-                }
-            ]
-        };
+    if (type !== "series") return { metas: [] };
+
+    try {
+        // Načítanie zoznamu relácií priamo z API STVR
+        const res = await axios.get("https://www.stvr.sk/json/archive.json", {
+            headers: { "User-Agent": "Mozilla/5.0" }
+        });
+
+        const shows = res.data || [];
+        
+        const metas = shows.slice(0, 50).map(show => ({
+            id: `stvr:show:${show.id}`,
+            type: "series",
+            name: show.title || show.name,
+            poster: show.image ? `https://www.stvr.sk${show.image}` : "https://www.stvr.sk/images/logo-stvr.png",
+            description: show.description || "Relácia z archívu STVR"
+        }));
+
+        return { metas };
+    } catch (e) {
+        console.error("STVR Catalog Error:", e.message);
+        return { metas: [] };
     }
-    return { metas: [] };
 });
 
-// 3. Streamy - HLS odkaz na živé vysielanie
-builder.defineStreamHandler(async ({ id }) => {
-    const streams = {
-        "stvr:jednotka": "https://live.stvr.sk/live/jednotka/playlist.m3u8",
-        "stvr:dvojka": "https://live.stvr.sk/live/dvojka/playlist.m3u8",
-        "stvr:24": "https://live.stvr.sk/live/24/playlist.m3u8"
-    };
+// 2. Detail relácie + zoznam epizód
+builder.defineMetaHandler(async ({ type, id }) => {
+    if (!id.startsWith("stvr:show:")) return { meta: {} };
 
-    if (streams[id]) {
+    const showId = id.replace("stvr:show:", "");
+
+    try {
+        // Získanie detailu a epizód pre danú reláciu
+        const res = await axios.get(`https://www.stvr.sk/json/archive/detail.json?id=${showId}`, {
+            headers: { "User-Agent": "Mozilla/5.0" }
+        });
+
+        const data = res.data || {};
+        const episodes = data.episodes || [];
+
+        const videos = episodes.map((ep, index) => ({
+            id: `stvr:ep:${ep.id}`,
+            title: ep.title || `Epizóda ${index + 1}`,
+            released: ep.date || new Date().toISOString(),
+            season: 1,
+            episode: index + 1
+        }));
+
         return {
-            streams: [
-                {
-                    title: "STVR HD Stream",
-                    url: streams[id]
-                }
-            ]
+            meta: {
+                id: id,
+                type: "series",
+                name: data.title || "STVR Relácia",
+                poster: data.image ? `https://www.stvr.sk${data.image}` : undefined,
+                description: data.description,
+                videos: videos
+            }
         };
+    } catch (e) {
+        return { meta: {} };
+    }
+});
+
+// 3. Získanie reálneho HLS streamu pre konkrétnu epizódu
+builder.defineStreamHandler(async ({ id }) => {
+    if (!id.startsWith("stvr:ep:")) return { streams: [] };
+
+    const epId = id.replace("stvr:ep:", "");
+
+    try {
+        // Vyžiadanie prehrajúceho M3U8 linku z iframe prehrávača STVR
+        const res = await axios.get(`https://www.stvr.sk/json/archive/stream.json?id=${epId}`, {
+            headers: { 
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://www.stvr.sk/"
+            }
+        });
+
+        if (res.data && res.data.stream) {
+            return {
+                streams: [
+                    {
+                        title: "STVR Archív (HD)",
+                        url: res.data.stream
+                    }
+                ]
+            };
+        }
+    } catch (e) {
+        console.error("STVR Stream Error:", e.message);
     }
 
     return { streams: [] };
 });
 
-// 4. Export pre Vercel s plnou CORS a UTF-8 podporou
+// 4. Export pre Vercel s CORS a UTF-8
 module.exports = (req, res) => {
-    // CORS hlavičky pre Fusion Media Center
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Content-Type", "application/json; charset=utf-8");
 
-    // Odpoveď pre OPTIONS pre-flight požiadavku
     if (req.method === "OPTIONS") {
         res.statusCode = 200;
         res.end();
