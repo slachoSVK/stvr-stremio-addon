@@ -1,0 +1,9 @@
+{
+  "name": "stvr-stremio-addon",
+  "version": "1.0.0",
+  "description": "STVR Archiv pre Stremio a Fusion",
+  "main": "api/index.js",
+  "dependencies": {
+    "stremio-addon-sdk": "^1.6.0"
+  }
+}
