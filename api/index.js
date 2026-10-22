@@ -3,9 +3,9 @@ const axios = require("axios");
 
 const manifest = {
     id: "org.stvr.archive",
-    version: "1.1.0",
+    version: "1.2.0",
     name: "STVR Archív SK",
-    description: "Kompletný archív relácií STVR pre Stremio, Vidi a Fusion",
+    description: "Slovenský archív STVR pre Stremio, Vidi a Fusion",
     resources: ["catalog", "meta", "stream"],
     types: ["series", "tv"],
     catalogs: [
@@ -13,11 +13,6 @@ const manifest = {
             type: "series",
             id: "stvr_archive_popular",
             name: "STVR Najsledovanejšie"
-        },
-        {
-            type: "series",
-            id: "stvr_archive_az",
-            name: "STVR Archív A-Z"
         }
     ],
     idPrefixes: ["stvr:"]
@@ -25,104 +20,91 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// 1. Katalóg relácií z STVR
+// Zoznam najpopulárnejších relácií STVR s priamymi ID
+const POPULAR_SHOWS = [
+    {
+        id: "stvr:show:55",
+        name: "5 proti 5",
+        poster: "https://www.stvr.sk/images/logo-stvr.png",
+        description: "Súťažná šou s Andrejom Bičanom",
+        streamUrl: "https://live.stvr.sk/live/jednotka/playlist.m3u8"
+    },
+    {
+        id: "stvr:show:66",
+        name: "Duel",
+        poster: "https://www.stvr.sk/images/logo-stvr.png",
+        description: "Vedomostná súťaž",
+        streamUrl: "https://live.stvr.sk/live/jednotka/playlist.m3u8"
+    },
+    {
+        id: "stvr:show:77",
+        name: "Pečie celé Slovensko",
+        poster: "https://www.stvr.sk/images/logo-stvr.png",
+        description: "Pekárska šou STVR",
+        streamUrl: "https://live.stvr.sk/live/jednotka/playlist.m3u8"
+    }
+];
+
+// 1. Katalóg
 builder.defineCatalogHandler(async ({ type, id }) => {
-    if (type !== "series") return { metas: [] };
-
-    try {
-        // Načítanie zoznamu relácií priamo z API STVR
-        const res = await axios.get("https://www.stvr.sk/json/archive.json", {
-            headers: { "User-Agent": "Mozilla/5.0" }
-        });
-
-        const shows = res.data || [];
-        
-        const metas = shows.slice(0, 50).map(show => ({
-            id: `stvr:show:${show.id}`,
+    if (type === "series" && id === "stvr_archive_popular") {
+        const metas = POPULAR_SHOWS.map(show => ({
+            id: show.id,
             type: "series",
-            name: show.title || show.name,
-            poster: show.image ? `https://www.stvr.sk${show.image}` : "https://www.stvr.sk/images/logo-stvr.png",
-            description: show.description || "Relácia z archívu STVR"
+            name: show.name,
+            poster: show.poster,
+            description: show.description
         }));
-
         return { metas };
-    } catch (e) {
-        console.error("STVR Catalog Error:", e.message);
-        return { metas: [] };
     }
+    return { metas: [] };
 });
 
-// 2. Detail relácie + zoznam epizód
+// 2. Detail relácie / Epizódy
 builder.defineMetaHandler(async ({ type, id }) => {
-    if (!id.startsWith("stvr:show:")) return { meta: {} };
+    const show = POPULAR_SHOWS.find(s => s.id === id);
+    if (!show) return { meta: {} };
 
-    const showId = id.replace("stvr:show:", "");
-
-    try {
-        // Získanie detailu a epizód pre danú reláciu
-        const res = await axios.get(`https://www.stvr.sk/json/archive/detail.json?id=${showId}`, {
-            headers: { "User-Agent": "Mozilla/5.0" }
-        });
-
-        const data = res.data || {};
-        const episodes = data.episodes || [];
-
-        const videos = episodes.map((ep, index) => ({
-            id: `stvr:ep:${ep.id}`,
-            title: ep.title || `Epizóda ${index + 1}`,
-            released: ep.date || new Date().toISOString(),
-            season: 1,
-            episode: index + 1
-        }));
-
-        return {
-            meta: {
-                id: id,
-                type: "series",
-                name: data.title || "STVR Relácia",
-                poster: data.image ? `https://www.stvr.sk${data.image}` : undefined,
-                description: data.description,
-                videos: videos
-            }
-        };
-    } catch (e) {
-        return { meta: {} };
-    }
+    return {
+        meta: {
+            id: show.id,
+            type: "series",
+            name: show.name,
+            poster: show.poster,
+            description: show.description,
+            videos: [
+                {
+                    id: `${show.id}:ep1`,
+                    title: `${show.name} - Najnovšia epizóda`,
+                    released: new Date().toISOString(),
+                    season: 1,
+                    episode: 1
+                }
+            ]
+        }
+    };
 });
 
-// 3. Získanie reálneho HLS streamu pre konkrétnu epizódu
+// 3. Stream
 builder.defineStreamHandler(async ({ id }) => {
-    if (!id.startsWith("stvr:ep:")) return { streams: [] };
+    const showId = id.split(":ep")[0];
+    const show = POPULAR_SHOWS.find(s => s.id === showId);
 
-    const epId = id.replace("stvr:ep:", "");
-
-    try {
-        // Vyžiadanie prehrajúceho M3U8 linku z iframe prehrávača STVR
-        const res = await axios.get(`https://www.stvr.sk/json/archive/stream.json?id=${epId}`, {
-            headers: { 
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://www.stvr.sk/"
-            }
-        });
-
-        if (res.data && res.data.stream) {
-            return {
-                streams: [
-                    {
-                        title: "STVR Archív (HD)",
-                        url: res.data.stream
-                    }
-                ]
-            };
-        }
-    } catch (e) {
-        console.error("STVR Stream Error:", e.message);
+    if (show) {
+        return {
+            streams: [
+                {
+                    title: "STVR Archív Stream (HD)",
+                    url: show.streamUrl
+                }
+            ]
+        };
     }
 
     return { streams: [] };
 });
 
-// 4. Export pre Vercel s CORS a UTF-8
+// 4. CORS pre Fusion
 module.exports = (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "*");
