@@ -1,5 +1,6 @@
 const { addonBuilder } = require("stremio-addon-sdk");
 
+// 1. Definícia Manifestu
 const manifest = {
     id: "org.stvr.archive",
     version: "1.0.0",
@@ -19,7 +20,7 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// Katalóg - Živé kanály STVR
+// 2. Katalóg - Živé kanály STVR
 builder.defineCatalogHandler(async ({ type, id }) => {
     if (id === "stvr_live") {
         return {
@@ -51,9 +52,8 @@ builder.defineCatalogHandler(async ({ type, id }) => {
     return { metas: [] };
 });
 
-// Streamy - Priame prepojenie na HLS streamy
+// 3. Streamy - HLS odkaz na živé vysielanie
 builder.defineStreamHandler(async ({ id }) => {
-    // HLS streamy STVR
     const streams = {
         "stvr:jednotka": "https://live.stvr.sk/live/jednotka/playlist.m3u8",
         "stvr:dvojka": "https://live.stvr.sk/live/dvojka/playlist.m3u8",
@@ -74,19 +74,30 @@ builder.defineStreamHandler(async ({ id }) => {
     return { streams: [] };
 });
 
+// 4. Export pre Vercel s plnou CORS a UTF-8 podporou
 module.exports = (req, res) => {
+    // CORS hlavičky pre Fusion Media Center
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+
+    // Odpoveď pre OPTIONS pre-flight požiadavku
+    if (req.method === "OPTIONS") {
+        res.statusCode = 200;
+        res.end();
+        return;
+    }
+
     const addonInterface = builder.getInterface();
     if (req.url === "/" || req.url === "/manifest.json") {
-        res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify(addonInterface.manifest));
     } else {
-        // Spracovanie ostatných požiadaviek (catalog / stream)
         addonInterface.get(req.url, (err, response) => {
             if (err) {
                 res.statusCode = 500;
                 res.end(JSON.stringify({ error: err.message }));
             } else {
-                res.setHeader("Content-Type", "application/json");
                 res.end(JSON.stringify(response));
             }
         });
